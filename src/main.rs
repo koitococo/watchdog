@@ -1,6 +1,7 @@
 use clap::{Parser, ValueHint};
 use notify::Watcher;
 use std::fs;
+use std::io;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::Path;
@@ -8,6 +9,7 @@ use std::process::Child;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use std::io::Write;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -27,9 +29,12 @@ struct Args {
     /// Kill previous child process when trigger again. Always true when reexec is enabled
     #[arg(short = 'k', long = "kill")]
     kill: bool,
-    /// Do not print anything except errors
-    #[arg(short = 'q', long = "quiet")]
-    quiet: bool,
+    /// Show verbose output
+    #[arg(short = 'v', long = "verbose")]
+    verbose: bool,
+    /// clear screen before execute command
+    #[arg(short = 'c', long = "clear")]
+    clear: bool,
     /// Command to run
     #[arg(required = true, num_args(1..), value_hint = ValueHint::CommandWithArguments, trailing_var_arg(true))]
     command: Vec<String>,
@@ -76,7 +81,7 @@ fn main() {
         })
         .unwrap();
     for file in files {
-        if !args.quiet {
+        if args.verbose {
             println!("Watching file: {}", file);
         }
         if let Err(e) = watcher.watch(Path::new(&file), notify::RecursiveMode::Recursive) {
@@ -91,10 +96,14 @@ fn main() {
         command.arg(arg);
     }
     let mut child: Option<Child> = if args.reexec {
+        if args.clear {
+            print!("\x1bc");
+            io::stdout().flush().unwrap();
+        }
         command
             .spawn()
             .inspect(|_| {
-                if !args.quiet {
+                if args.verbose {
                     println!("Child process started");
                 }
             })
@@ -108,11 +117,11 @@ fn main() {
         let now = std::time::Instant::now();
         if now - last > Duration::from_millis(interval) {
             last = now;
-            if !args.quiet {
+            if args.verbose {
                 println!("Change detected");
             }
             if let Some(mut prev_child) = child.take() {
-                if args.kill && args.reexec {
+                if args.kill || args.reexec {
                     if prev_child
                         .kill()
                         .inspect_err(|e| eprintln!("Failed to kill child: {}", e))
@@ -122,7 +131,7 @@ fn main() {
                             .inspect_err(|e| eprintln!("Failed to finalize child: {}", e))
                             .is_ok()
                     {
-                        if !args.quiet {
+                        if args.verbose {
                             println!("Child process terminated");
                         }
                     } else {
@@ -132,14 +141,21 @@ fn main() {
                     let exited = prev_child.try_wait().unwrap().is_none();
                     if !exited {
                         child = Some(prev_child);
+                        if args.verbose {
+                            println!("Child process is still running, skipping re-execution");
+                        }
                     }
                 }
             }
             if child.is_none() {
+                if args.clear {
+                    print!("\x1bc");
+                    io::stdout().flush().unwrap();
+                }
                 child = command
                     .spawn()
                     .inspect(|_| {
-                        if !args.quiet {
+                        if args.verbose {
                             println!("Child process started");
                         }
                     })
